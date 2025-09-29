@@ -1,0 +1,5 @@
+fastapi==0.109.2
+uvicorn==0.23.2
+python-dotenv==1.0.1
+google-cloud-firestore==3.14.0
+aiofiles==23.1.0
