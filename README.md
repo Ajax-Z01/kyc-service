@@ -16,12 +16,12 @@ Service ini dapat menerima dokumen dari frontend/trade-chain, menyimpan metadata
 
 kyc-service/
 ├─ app/
+│  ├─ main.py         # Entry point FastAPI
 │  ├─ api/            # Router FastAPI
 │  ├─ services/       # Logika backend & blockchain service
 │  ├─ models/         # Model data
 ├─ account/           # Service Account JSON Firestore
 ├─ temp/              # Penyimpanan sementara dokumen
-├─ main.py            # Entry point FastAPI
 ├─ .env               # Environment variables
 ├─ requirements.txt
 ├─ README.md

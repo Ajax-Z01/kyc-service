@@ -6,7 +6,7 @@ import os
 RPC_URL = os.getenv("ETH_RPC_URL")  # misal Ganache atau testnet
 PRIVATE_KEY = os.getenv("ADMIN_PRIVATE_KEY")  # kunci admin KYC
 CONTRACT_ADDRESS = os.getenv("KYC_CONTRACT_ADDRESS")
-ABI_PATH = "app/contracts/KYCRegistry.json"  # ABI JSON hasil compile contract
+ABI_PATH = "app/contracts/KYCRegistry.sol/KYCRegistry.json"
 
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 
