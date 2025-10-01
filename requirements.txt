@@ -3,3 +3,9 @@ uvicorn==0.23.2
 python-dotenv==1.0.1
 google-cloud-firestore==3.14.0
 aiofiles==23.1.0
+PyPDF2==3.0.1
+pytesseract==0.3.10
+pillow==11.3.0
+transformers==4.56.2
+torch==2.8.0
+sentencepiece==0.1.99

@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # harus ini dulu sebelum Firestore
+load_dotenv()
 
 from fastapi import FastAPI
 from app.api import documents

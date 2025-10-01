@@ -10,11 +10,16 @@ ABI_PATH = "app/contracts/KYCRegistry.sol/KYCRegistry.json"
 
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 
-# load ABI
+# Load ABI dari artifact
 with open(ABI_PATH) as f:
-    contract_abi = json.load(f)
+    artifact = json.load(f)
 
-contract = w3.eth.contract(address=Web3.toChecksumAddress(CONTRACT_ADDRESS), abi=contract_abi)
+contract_abi = artifact["abi"]  # ✅ ambil hanya list ABI
+
+contract = w3.eth.contract(
+    address=Web3.to_checksum_address(CONTRACT_ADDRESS),
+    abi=contract_abi
+)
 
 # --------- helper function ---------
 def mint_document(to_address: str, file_hash: str, token_uri: str):
@@ -22,7 +27,7 @@ def mint_document(to_address: str, file_hash: str, token_uri: str):
     nonce = w3.eth.get_transaction_count(account.address)
 
     txn = contract.functions.verifyAndMint(
-        Web3.toChecksumAddress(to_address),
+        Web3.to_checksum_address(to_address),
         file_hash,
         token_uri
     ).build_transaction({
@@ -37,8 +42,10 @@ def mint_document(to_address: str, file_hash: str, token_uri: str):
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
     return receipt
 
+
 def get_document_status(token_id: int):
     return contract.functions.getStatus(token_id).call()
+
 
 def sign_document(token_id: int):
     account = w3.eth.account.from_key(PRIVATE_KEY)

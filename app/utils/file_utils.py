@@ -1,20 +1,27 @@
 import os
-import hashlib
-from aiofiles import open as aio_open
+from PyPDF2 import PdfReader
+import pytesseract
+from PIL import Image
 
-TEMP_FOLDER = "temp"
-os.makedirs(TEMP_FOLDER, exist_ok=True)
+async def extract_text(file_path: str) -> str:
+    ext = os.path.splitext(file_path)[1].lower()
+    text = ""
 
-async def save_temp_file(file):
-    """
-    Simpan file sementara dan hitung hash-nya.
-    """
-    content = await file.read()
-    file_hash = hashlib.sha256(content).hexdigest()
-    file_name = f"{file_hash}_{file.filename}"
+    print(f"[DEBUG] Extracting text from: {file_path} (ext: {ext})")
 
-    file_path = os.path.join(TEMP_FOLDER, file_name)
-    async with aio_open(file_path, "wb") as f:
-        await f.write(content)
+    if ext == ".pdf":
+        reader = PdfReader(file_path)
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text() or ""
+            print(f"[DEBUG] PDF page {i} text length: {len(page_text)}")
+            text += page_text
+    elif ext in [".png", ".jpg", ".jpeg"]:
+        img = Image.open(file_path)
+        text = pytesseract.image_to_string(img)
+    else:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+            print(f"[DEBUG] Plain text length: {len(text)}")
+            print(f"[DEBUG] Plain text preview: {text[:200]}")
 
-    return file_path, file_hash
+    return text
