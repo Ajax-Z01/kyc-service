@@ -1,34 +1,38 @@
+import os
+import hashlib
 from datetime import datetime
-from app.services.blockchain_service import sign_document
+from typing import List, Optional
+import aiofiles
+from google.cloud import firestore
+
+from app.services.blockchain_service import mint_document, review_document_onchain, sign_document_onchain
 from app.utils.file_utils import extract_text
 from app.utils.ktp_parser import parse_ktp
 from app.utils.verification import verify_document_advanced
-from google.cloud import firestore
 from app.models.document import DocumentResponse
-from typing import List, Optional
+from app.utils.crypto_utils import encrypt_file
+from app.services.openai_service import analyze_document_with_ai
 
 db = firestore.Client()
 
-
+# ---------------- Upload dan buat dokumen status Draft ----------------
 async def save_document(wallet_address: str, file) -> DocumentResponse:
-    import hashlib, os
-    from aiofiles import open as aio_open
-
     TEMP_FOLDER = "temp"
     os.makedirs(TEMP_FOLDER, exist_ok=True)
 
-    # --- Save file to temp ---
+    # --- Simpan file sementara ---
     content = await file.read()
     file_hash = hashlib.sha256(content).hexdigest()
     file_name = f"{file_hash}_{file.filename}"
     file_path = f"{TEMP_FOLDER}/{file_name}"
 
-    async with aio_open(file_path, "wb") as f:
+    async with aiofiles.open(file_path, "wb") as f:
         await f.write(content)
 
-    # --- Save document metadata ---
-    doc_ref = db.collection("documents").document()
     now = datetime.utcnow()
+
+    # --- Simpan metadata awal (Draft) ---
+    doc_ref = db.collection("documents").document()
     metadata = {
         "walletAddress": wallet_address,
         "fileName": file.filename,
@@ -40,35 +44,41 @@ async def save_document(wallet_address: str, file) -> DocumentResponse:
     }
     doc_ref.set(metadata)
 
-    # --- Extract text ---
+    # --- 🔐 Enkripsi file ---
+    encrypted_path, encryption_key = encrypt_file(file_path)
+
+    # --- 📝 Ekstraksi teks ---
     text = await extract_text(file_path)
 
-    # --- Parse KTP fields ---
-    parsed_fields = parse_ktp(text)
+    # --- Hapus file plaintext ---
+    os.remove(file_path)
 
-    # --- Verification ---
-    verification_result = verify_document_advanced(parsed_fields)
+    # --- Parsing lokal + verifikasi ---
+    parsed_local = parse_ktp(text)
+    verification_local = verify_document_advanced(parsed_local)
 
-    # --- Save log with parsed fields ---
+    # --- Simpan log OCR ---
     log_ref = db.collection("document_logs").document()
     log_ref.set({
         "documentId": doc_ref.id,
         "ocrText": text,
-        "parsedFields": parsed_fields,
-        "verificationResult": verification_result,
-        "status": "Draft",
+        "parsedFieldsLocal": parsed_local,
+        "verificationLocal": verification_local,
         "createdAt": datetime.utcnow()
     })
 
-    # --- Update document status ---
-    if verification_result == "Verified":
-        doc_ref.update({"status": "Verified", "updatedAt": datetime.utcnow()})
-        token_id = sign_document(doc_ref.id)
-        doc_ref.update({"status": "Signed", "tokenId": token_id, "updatedAt": datetime.utcnow()})
-    else:
-        doc_ref.update({"status": "Rejected", "updatedAt": datetime.utcnow()})
+    # ---------------- Mint dokumen di blockchain ----------------
+    try:
+        token_id = mint_document(
+            to_address=wallet_address,
+            file_hash=file_hash,
+            token_uri=f"ipfs://{file_hash}"
+        )
+        doc_ref.update({"tokenId": token_id})
+    except Exception as e:
+        print(f"⚠️ Mint failed: {e}")
 
-    # --- Return DocumentResponse ---
+    # Ambil snapshot terakhir
     doc_snapshot = doc_ref.get().to_dict()
     return DocumentResponse(
         id=doc_ref.id,
@@ -77,13 +87,57 @@ async def save_document(wallet_address: str, file) -> DocumentResponse:
         file_hash=doc_snapshot.get("fileHash", ""),
         status=doc_snapshot.get("status", "Draft"),
         token_id=doc_snapshot.get("tokenId"),
-        created_at=doc_snapshot.get("createdAt", datetime.utcnow()),
-        updated_at=doc_snapshot.get("updatedAt", datetime.utcnow())
+        created_at=doc_snapshot.get("createdAt", now),
+        updated_at=doc_snapshot.get("updatedAt", now)
     )
 
+# ---------------- Review Dokumen (Admin) ----------------
+def review_document(document_id: str) -> bool:
+    doc_ref = db.collection("documents").document(document_id)
+    doc_snapshot = doc_ref.get()
+    if not doc_snapshot.exists:
+        return False
 
+    data = doc_snapshot.to_dict()
+
+    # Mint token jika belum pernah di-mint
+    if not data.get("tokenId"):
+        token_id = mint_document(
+            to_address=data["walletAddress"],
+            file_hash=data["fileHash"],
+            token_uri=f"ipfs://{data['fileHash']}"
+        )
+        doc_ref.update({"tokenId": token_id})
+        data["tokenId"] = token_id
+
+    # Panggil fungsi review di blockchain
+    review_document_onchain(data["tokenId"])
+
+    # Update status Firestore
+    doc_ref.update({"status": "Reviewed", "updatedAt": datetime.utcnow()})
+    return True
+
+# ---------------- Sign Dokumen (Admin) ----------------
+def sign_document(document_id: str) -> bool:
+    doc_ref = db.collection("documents").document(document_id)
+    doc_snapshot = doc_ref.get()
+    if not doc_snapshot.exists:
+        return False
+
+    data = doc_snapshot.to_dict()
+    token_id = data.get("tokenId")
+    if not token_id:
+        return False
+
+    # Panggil blockchain untuk sign
+    sign_document_onchain(token_id)
+
+    # Update status Firestore
+    doc_ref.update({"status": "Signed", "updatedAt": datetime.utcnow()})
+    return True
+
+# ---------------- Getter ----------------
 def get_document(document_id: str) -> Optional[DocumentResponse]:
-    """Ambil metadata dokumen berdasarkan ID"""
     doc_ref = db.collection("documents").document(document_id)
     doc_snapshot = doc_ref.get()
     if not doc_snapshot.exists:
@@ -100,9 +154,7 @@ def get_document(document_id: str) -> Optional[DocumentResponse]:
         updated_at=data.get("updatedAt", datetime.utcnow())
     )
 
-
 def get_all_documents() -> List[DocumentResponse]:
-    """Ambil semua dokumen dari Firestore"""
     snapshots = db.collection("documents").stream()
     documents = []
     for doc in snapshots:
@@ -121,9 +173,7 @@ def get_all_documents() -> List[DocumentResponse]:
         )
     return documents
 
-
 def get_document_logs(document_id: str) -> List[dict]:
-    """Ambil semua log OCR untuk dokumen tertentu"""
     snapshots = db.collection("document_logs") \
                   .where("documentId", "==", document_id) \
                   .order_by("createdAt") \
@@ -134,8 +184,10 @@ def get_document_logs(document_id: str) -> List[dict]:
         logs.append({
             "id": log.id,
             "ocrText": data.get("ocrText", ""),
-            "parsedFields": data.get("parsedFields", {}),
-            "verificationResult": data.get("verificationResult", "Draft"),
+            "parsedFieldsLocal": data.get("parsedFieldsLocal", {}),
+            "parsedFieldsAI": data.get("parsedFieldsAI", {}),
+            "verificationLocal": data.get("verificationLocal", ""),
+            "verificationAI": data.get("verificationAI", ""),
             "createdAt": data.get("createdAt", datetime.utcnow())
         })
     return logs
