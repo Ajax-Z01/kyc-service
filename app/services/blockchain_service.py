@@ -1,8 +1,9 @@
+# app/services/blockchain_service.py
 from web3 import Web3
 import json
 import os
 
-# --------- Konfigurasi Web3 ---------
+# -------------------- Konfigurasi Web3 --------------------
 RPC_URL = os.getenv("ETH_RPC_URL")
 PRIVATE_KEY = os.getenv("ADMIN_PRIVATE_KEY")
 CONTRACT_ADDRESS = os.getenv("KYC_CONTRACT_ADDRESS")
@@ -12,7 +13,7 @@ w3 = Web3(Web3.HTTPProvider(RPC_URL))
 if not w3.is_connected():
     raise RuntimeError("❌ Gagal konek ke RPC, cek ETH_RPC_URL.")
 
-# Load ABI
+# Load ABI dari file artifact
 with open(ABI_PATH) as f:
     artifact = json.load(f)
 contract_abi = artifact["abi"]
@@ -22,7 +23,8 @@ contract = w3.eth.contract(
     abi=contract_abi
 )
 
-# --------- Helpers ---------
+
+# -------------------- Helpers --------------------
 def _get_admin_account():
     return w3.eth.account.from_key(PRIVATE_KEY)
 
@@ -35,10 +37,11 @@ def _build_and_send(txn):
     return receipt
 
 
-# --------- Blockchain Actions ---------
+# -------------------- Blockchain Actions --------------------
+
 def mint_document(to_address: str, file_hash: str, token_uri: str) -> int:
     """
-    Mint dokumen dan ambil tokenId yang dihasilkan.
+    ✅ Mint dokumen langsung ke blockchain dan ambil tokenId dari mapping hashToTokenId.
     """
     account = _get_admin_account()
     nonce = w3.eth.get_transaction_count(account.address)
@@ -54,17 +57,17 @@ def mint_document(to_address: str, file_hash: str, token_uri: str) -> int:
         "gasPrice": w3.to_wei("10", "gwei")
     })
 
-    # Kirim transaksi
+    # Kirim transaksi dan tunggu receipt
     _build_and_send(txn)
 
-    # Ambil tokenId dari kontrak (hash -> tokenId)
+    # Ambil tokenId dari mapping hashToTokenId
     token_id = contract.functions.getTokenIdByHash(file_hash).call()
     return token_id
 
 
 def review_document_onchain(token_id: int):
     """
-    Admin melakukan review dokumen (Draft -> Reviewed)
+    ✅ Admin melakukan review dokumen (Draft -> Reviewed)
     """
     account = _get_admin_account()
     nonce = w3.eth.get_transaction_count(account.address)
@@ -81,7 +84,7 @@ def review_document_onchain(token_id: int):
 
 def sign_document_onchain(token_id: int):
     """
-    Admin tanda tangan dokumen (Reviewed -> Signed)
+    ✅ Admin tanda tangan dokumen (Reviewed -> Signed)
     """
     account = _get_admin_account()
     nonce = w3.eth.get_transaction_count(account.address)
@@ -98,19 +101,22 @@ def sign_document_onchain(token_id: int):
 
 def get_token_id_by_hash(file_hash: str) -> int:
     """
-    Ambil tokenId dari hash dokumen
+    ✅ Ambil tokenId dari hash dokumen
     """
     return contract.functions.getTokenIdByHash(file_hash).call()
 
 
 def get_document_status(token_id: int) -> int:
     """
-    Ambil status dokumen (0 = Draft, 1 = Reviewed, 2 = Signed)
+    ✅ Ambil status dokumen (0 = Draft, 1 = Reviewed, 2 = Signed)
     """
     return contract.functions.getStatus(token_id).call()
 
 
 def add_minter(minter_address: str):
+    """
+    ✅ Tambahkan address ke daftar minter (hanya owner)
+    """
     account = _get_admin_account()
     nonce = w3.eth.get_transaction_count(account.address)
 
@@ -123,6 +129,11 @@ def add_minter(minter_address: str):
         "gasPrice": w3.to_wei("10", "gwei")
     })
 
-    receipt = _build_and_send(txn)
-    return receipt
-    
+    return _build_and_send(txn)
+
+
+def is_minter(address: str) -> bool:
+    """
+    ✅ Cek apakah suatu address sudah jadi minter
+    """
+    return contract.functions.isMinter(Web3.to_checksum_address(address)).call()

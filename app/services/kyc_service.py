@@ -1,7 +1,7 @@
 import os
 import hashlib
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Callable, Optional
 import aiofiles
 from google.cloud import firestore
 
@@ -15,8 +15,19 @@ from app.services.openai_service import analyze_document_with_ai
 
 db = firestore.Client()
 
+
 # ---------------- Upload dan buat dokumen status Draft ----------------
-async def save_document(wallet_address: str, file) -> DocumentResponse:
+async def save_document(
+    wallet_address: str,
+    file,
+    parser_hook: Optional[Callable[[str], dict]] = None,
+    ai_hook: Optional[Callable[[str], dict]] = None
+) -> DocumentResponse:
+    """
+    parser_hook: callable yang menerima teks dan mengembalikan dict parsed fields
+    ai_hook: callable yang menerima teks dan mengembalikan dict hasil AI
+    """
+
     TEMP_FOLDER = "temp"
     os.makedirs(TEMP_FOLDER, exist_ok=True)
 
@@ -53,17 +64,17 @@ async def save_document(wallet_address: str, file) -> DocumentResponse:
     # --- Hapus file plaintext ---
     os.remove(file_path)
 
-    # --- Parsing lokal + verifikasi ---
-    parsed_local = parse_ktp(text)
-    verification_local = verify_document_advanced(parsed_local)
+    # --- Parsing optional ---
+    parsed_fields = parser_hook(text) if parser_hook else {}
+    ai_fields = ai_hook(text) if ai_hook else {}
 
-    # --- Simpan log OCR ---
+    # --- Simpan log OCR + hasil parsing ---
     log_ref = db.collection("document_logs").document()
     log_ref.set({
         "documentId": doc_ref.id,
         "ocrText": text,
-        "parsedFieldsLocal": parsed_local,
-        "verificationLocal": verification_local,
+        "parsedFieldsLocal": parsed_fields,
+        "parsedFieldsAI": ai_fields,
         "createdAt": datetime.utcnow()
     })
 
@@ -91,6 +102,7 @@ async def save_document(wallet_address: str, file) -> DocumentResponse:
         updated_at=doc_snapshot.get("updatedAt", now)
     )
 
+
 # ---------------- Review Dokumen (Admin) ----------------
 def review_document(document_id: str) -> bool:
     doc_ref = db.collection("documents").document(document_id)
@@ -113,9 +125,13 @@ def review_document(document_id: str) -> bool:
     # Panggil fungsi review di blockchain
     review_document_onchain(data["tokenId"])
 
-    # Update status Firestore
-    doc_ref.update({"status": "Reviewed", "updatedAt": datetime.utcnow()})
+    # ✅ Update status Firestore
+    doc_ref.update({
+        "status": "Reviewed",
+        "updatedAt": datetime.utcnow()
+    })
     return True
+
 
 # ---------------- Sign Dokumen (Admin) ----------------
 def sign_document(document_id: str) -> bool:
@@ -132,9 +148,13 @@ def sign_document(document_id: str) -> bool:
     # Panggil blockchain untuk sign
     sign_document_onchain(token_id)
 
-    # Update status Firestore
-    doc_ref.update({"status": "Signed", "updatedAt": datetime.utcnow()})
+    # ✅ Update status Firestore
+    doc_ref.update({
+        "status": "Signed",
+        "updatedAt": datetime.utcnow()
+    })
     return True
+
 
 # ---------------- Getter ----------------
 def get_document(document_id: str) -> Optional[DocumentResponse]:
@@ -154,6 +174,7 @@ def get_document(document_id: str) -> Optional[DocumentResponse]:
         updated_at=data.get("updatedAt", datetime.utcnow())
     )
 
+
 def get_all_documents() -> List[DocumentResponse]:
     snapshots = db.collection("documents").stream()
     documents = []
@@ -172,6 +193,7 @@ def get_all_documents() -> List[DocumentResponse]:
             )
         )
     return documents
+
 
 def get_document_logs(document_id: str) -> List[dict]:
     snapshots = db.collection("document_logs") \
