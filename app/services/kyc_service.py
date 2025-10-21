@@ -16,6 +16,85 @@ from app.services.openai_service import analyze_document_with_ai
 db = firestore.Client()
 
 
+# ---------------- Upload dokumen dari Trade Chain ----------------
+async def save_document_from_trade_chain(
+    wallet_address: str,
+    token_id: int,
+    file,
+    parser_hook: Optional[Callable[[str], dict]] = None,
+    ai_hook: Optional[Callable[[str], dict]] = None
+):
+    """
+    Simpan dokumen yang berasal dari sistem trade-chain.
+    - Tidak melakukan minting lagi
+    - Menyimpan token_id yang sudah ada
+    - OCR + optional parser/AI
+    """
+    TEMP_FOLDER = "temp"
+    os.makedirs(TEMP_FOLDER, exist_ok=True)
+
+    # --- Simpan file sementara ---
+    content = await file.read()
+    file_hash = hashlib.sha256(content).hexdigest()
+    file_name = f"{file_hash}_{file.filename}"
+    file_path = f"{TEMP_FOLDER}/{file_name}"
+
+    async with aiofiles.open(file_path, "wb") as f:
+        await f.write(content)
+
+    now = datetime.utcnow()
+
+    # --- Simpan metadata awal ---
+    doc_ref = db.collection("documents").document()
+    metadata = {
+        "walletAddress": wallet_address,
+        "fileName": file.filename,
+        "fileHash": file_hash,
+        "status": "Draft",
+        "tokenId": token_id,
+        "createdAt": now,
+        "updatedAt": now
+    }
+    doc_ref.set(metadata)
+
+    # --- 🔐 Enkripsi file ---
+    encrypted_path, encryption_key = encrypt_file(file_path)
+
+    # --- 📝 Ekstraksi teks ---
+    text = await extract_text(file_path)
+
+    # --- Hapus file plaintext ---
+    os.remove(file_path)
+
+    # --- Parsing optional ---
+    parsed_fields = parser_hook(text) if parser_hook else {}
+    ai_fields = ai_hook(text) if ai_hook else {}
+
+    # --- Simpan log OCR + hasil parsing ---
+    log_ref = db.collection("document_logs").document()
+    log_ref.set({
+        "documentId": doc_ref.id,
+        "ocrText": text,
+        "parsedFieldsLocal": parsed_fields,
+        "parsedFieldsAI": ai_fields,
+        "createdAt": datetime.utcnow()
+    })
+
+    # --- Ambil snapshot terakhir ---
+    doc_snapshot = doc_ref.get().to_dict()
+
+    return {
+        "id": doc_ref.id,
+        "wallet_address": doc_snapshot.get("walletAddress", ""),
+        "file_name": doc_snapshot.get("fileName", ""),
+        "file_hash": doc_snapshot.get("fileHash", ""),
+        "status": doc_snapshot.get("status", "Received"),
+        "token_id": doc_snapshot.get("tokenId"),
+        "created_at": doc_snapshot.get("createdAt", now),
+        "updated_at": doc_snapshot.get("updatedAt", now)
+    }
+
+
 # ---------------- Upload dan buat dokumen status Draft ----------------
 async def save_document(
     wallet_address: str,

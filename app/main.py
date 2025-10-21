@@ -5,10 +5,19 @@ load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, Header
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from app.api import documents
 
 app = FastAPI(title="KYC Service")
 app.include_router(documents.router, prefix="/documents", tags=["Documents"])
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 async def root():

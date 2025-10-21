@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from typing import List
 
 from app.services.kyc_service import (
+    save_document_from_trade_chain,
     save_document,
     get_all_documents,
     get_document,
@@ -25,6 +26,21 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="File is required")
     document = await save_document(wallet_address, file)
     return document
+
+
+# ---------------- Upload document from Trade Chain ----------------
+@router.post("/trade-chain")
+async def upload_trade_chain_document(
+    wallet_address: str = Form(...),
+    token_id: int = Form(...),
+    file: UploadFile = None
+):
+    result = await save_document_from_trade_chain(
+        wallet_address=wallet_address,
+        token_id=token_id,
+        file=file
+    )
+    return result
 
 
 # ---------------- List all documents ----------------
