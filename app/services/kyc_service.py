@@ -12,6 +12,7 @@ from app.utils.verification import verify_document_advanced
 from app.models.document import DocumentResponse
 from app.utils.crypto_utils import encrypt_file
 from app.services.openai_service import analyze_document_with_ai
+from app.utils.tradechain_notifier import send_tradechain_notification
 
 db = firestore.Client()
 
@@ -209,6 +210,21 @@ def review_document(document_id: str) -> bool:
         "status": "Reviewed",
         "updatedAt": datetime.utcnow()
     })
+
+    # 🔔 Kirim notifikasi ke TradeChain backend
+    send_tradechain_notification(
+        user_id=data.get("walletAddress", ""),
+        executor_id="kyc_service",
+        notif_type="system",
+        title="KYC Review Completed",
+        message=f"Your document {data.get('fileName', '')} has been reviewed successfully.",
+        extra_data={
+            "documentId": document_id,
+            "tokenId": data.get("tokenId"),
+            "status": "Reviewed"
+        }
+    )
+
     return True
 
 
@@ -232,6 +248,21 @@ def sign_document(document_id: str) -> bool:
         "status": "Signed",
         "updatedAt": datetime.utcnow()
     })
+    
+    # 🔔 Kirim notifikasi ke TradeChain backend
+    send_tradechain_notification(
+        user_id=data.get("walletAddress", ""),
+        executor_id="kyc_service",
+        notif_type="system",
+        title="KYC Document Signed",
+        message=f"Your document {data.get('fileName', '')} has been signed successfully.",
+        extra_data={
+            "documentId": document_id,
+            "tokenId": token_id,
+            "status": "Signed"
+        }
+    )
+    
     return True
 
 
