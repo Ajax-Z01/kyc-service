@@ -4,15 +4,17 @@ from datetime import datetime
 from typing import List, Callable, Optional
 import aiofiles
 from google.cloud import firestore
+from eth_account.messages import encode_defunct
 
-from app.services.blockchain_service import mint_document, review_document_onchain, sign_document_onchain
+from app.services.blockchain_service import _get_admin_account, mint_document, review_document_onchain, sign_document_onchain
 from app.utils.file_utils import extract_text
 from app.utils.ktp_parser import parse_ktp
 from app.utils.verification import verify_document_advanced
-from app.models.document import DocumentResponse
+from app.models.document_model import DocumentResponse
 from app.utils.crypto_utils import encrypt_file
 from app.services.openai_service import analyze_document_with_ai
 from app.utils.tradechain_notifier import send_tradechain_notification
+from app.utils.tradechain_kyc import update_kyc_internal
 
 db = firestore.Client()
 
@@ -26,11 +28,11 @@ async def save_document_from_trade_chain(
     ai_hook: Optional[Callable[[str], dict]] = None
 ):
     """
-    Simpan dokumen yang berasal dari sistem trade-chain.
-    - Tidak melakukan minting lagi
-    - Menyimpan token_id yang sudah ada
-    - OCR + optional parser/AI
+    Simpan dokumen dari TradeChain dan langsung update internal KYC dengan txHash + signature admin
     """
+    from eth_account.messages import encode_defunct
+    from app.services.blockchain_service import _get_admin_account
+
     TEMP_FOLDER = "temp"
     os.makedirs(TEMP_FOLDER, exist_ok=True)
 
@@ -81,19 +83,18 @@ async def save_document_from_trade_chain(
         "createdAt": datetime.utcnow()
     })
 
-    # --- Ambil snapshot terakhir ---
+    # Ambil snapshot terakhir
     doc_snapshot = doc_ref.get().to_dict()
-
-    return {
-        "id": doc_ref.id,
-        "wallet_address": doc_snapshot.get("walletAddress", ""),
-        "file_name": doc_snapshot.get("fileName", ""),
-        "file_hash": doc_snapshot.get("fileHash", ""),
-        "status": doc_snapshot.get("status", "Received"),
-        "token_id": doc_snapshot.get("tokenId"),
-        "created_at": doc_snapshot.get("createdAt", now),
-        "updated_at": doc_snapshot.get("updatedAt", now)
-    }
+    return DocumentResponse(
+        id=doc_ref.id,
+        wallet_address=doc_snapshot.get("walletAddress", ""),
+        file_name=doc_snapshot.get("fileName", ""),
+        file_hash=doc_snapshot.get("fileHash", ""),
+        status=doc_snapshot.get("status", "Draft"),
+        token_id=doc_snapshot.get("tokenId"),
+        created_at=doc_snapshot.get("createdAt", now),
+        updated_at=doc_snapshot.get("updatedAt", now)
+    )
 
 
 # ---------------- Upload dan buat dokumen status Draft ----------------
@@ -203,7 +204,13 @@ def review_document(document_id: str) -> bool:
         data["tokenId"] = token_id
 
     # Panggil fungsi review di blockchain
-    review_document_onchain(data["tokenId"])
+    receipt = review_document_onchain(data["tokenId"])
+    tx_hash = receipt.transactionHash.hex()
+
+    # Buat ECDSA signature admin
+    account = _get_admin_account()
+    msg = encode_defunct(text=f"Review KYC document {data['tokenId']}")
+    signature = account.sign_message(msg).signature.hex()
 
     # ✅ Update status Firestore
     doc_ref.update({
@@ -211,18 +218,13 @@ def review_document(document_id: str) -> bool:
         "updatedAt": datetime.utcnow()
     })
 
-    # 🔔 Kirim notifikasi ke TradeChain backend
-    send_tradechain_notification(
-        user_id=data.get("walletAddress", ""),
-        executor_id="kyc_service",
-        notif_type="system",
-        title="KYC Review Completed",
-        message=f"Your document {data.get('fileName', '')} has been reviewed successfully.",
-        extra_data={
-            "documentId": document_id,
-            "tokenId": data.get("tokenId"),
-            "status": "Reviewed"
-        }
+    # 🛠 Update KYC internal di backend TradeChain
+    update_kyc_internal(
+        token_id=str(data["tokenId"]),
+        status="Reviewed",
+        reviewed_by="system",
+        tx_hash=tx_hash,
+        signature=signature
     )
 
     return True
@@ -241,28 +243,29 @@ def sign_document(document_id: str) -> bool:
         return False
 
     # Panggil blockchain untuk sign
-    sign_document_onchain(token_id)
+    receipt = sign_document_onchain(token_id)
+    tx_hash = receipt.transactionHash.hex()
+
+    # Buat ECDSA signature admin
+    account = _get_admin_account()
+    msg = encode_defunct(text=f"Sign KYC document {token_id}")
+    signature = account.sign_message(msg).signature.hex()
 
     # ✅ Update status Firestore
     doc_ref.update({
         "status": "Signed",
         "updatedAt": datetime.utcnow()
     })
-    
-    # 🔔 Kirim notifikasi ke TradeChain backend
-    send_tradechain_notification(
-        user_id=data.get("walletAddress", ""),
-        executor_id="kyc_service",
-        notif_type="system",
-        title="KYC Document Signed",
-        message=f"Your document {data.get('fileName', '')} has been signed successfully.",
-        extra_data={
-            "documentId": document_id,
-            "tokenId": token_id,
-            "status": "Signed"
-        }
+
+    # 🛠 Update KYC internal di backend TradeChain
+    update_kyc_internal(
+        token_id=str(token_id),
+        status="Signed",
+        signature=signature,
+        reviewed_by="system",
+        tx_hash=tx_hash
     )
-    
+
     return True
 
 

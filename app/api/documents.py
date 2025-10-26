@@ -12,7 +12,7 @@ from app.services.kyc_service import (
     sign_document
 )
 from app.services.blockchain_service import add_minter, is_minter
-from app.models.document import DocumentResponse
+from app.models.document_model import DocumentResponse
 
 router = APIRouter()
 
